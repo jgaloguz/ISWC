@@ -107,6 +107,7 @@ int main(int argc, char** argv)
    std::setprecision(8);
    while(t < tmax) {
 // Output trajectory
+      std::cerr << "\r" << std::setw(16) << t;
       std::cout << std::setw(16) << t
                 << std::setw(16) << pos[0]
                 << std::setw(16) << pos[1]
@@ -123,6 +124,7 @@ int main(int argc, char** argv)
       AdvanceEuler(t, pos, mom, dt);
       t += dt;
    };
+   std::cerr << "\r" << std::setw(16) << t;
 
    return 0;
 };
