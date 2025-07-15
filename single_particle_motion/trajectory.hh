@@ -1,31 +1,37 @@
 #include <cmath>
 
-const double q = 1.0;
-const double m = 1.0;
-const double c = 1.0;
-const double mc = m * c;
-const double q_c = q / c;
-const double s = 2.0;
+// Particle and equation constants
+const double q = 1.0;         // charge
+const double m = 1.0;         // mass
+const double c = 1.0;         // speed of light
+const double mc = m * c;      // mass times speed of light
+const double q_c = q / c;     // charge divided by speed of light
+const double s = 2.0;         // mystery constant
 
-const double Bx = 0.0;
-const double By = 0.0;
-const double Bz = 0.5;
+// Magnetic field
+const double Bx = 0.0;        // magnetic field in the x direction
+const double By = 0.0;        // magnetic field in the y direction
+const double Bz = 0.5;        // magnetic field in the z direction
 
-const double Ex = 0.0;
-const double Ey = 0.0;
-const double Ez = 0.0;
+// Electric field
+const double Ex = 0.0;        // electric field in the x direction
+const double Ey = 0.0;        // electric field in the y direction
+const double Ez = 0.0;        // electric field in the z direction
 
-const double Rx = -10.0;
-const double Ry = 0.0;
-const double Rz = 0.0;
+// Position
+const double Rx = -10.0;      // initial x position
+const double Ry = 0.0;        // initial y position
+const double Rz = 0.0;        // initial z position
 
-const double Px = 1.0;
-const double Py = 0.0;
-const double Pz = 1.0;
+// Momentum
+const double Px = 1.0;        // initial x momentum
+const double Py = 0.0;        // initial y momentum
+const double Pz = 1.0;        // initial z momentum
 
-const double dmax = 0.1;
-const double tmax = 500.0;
-const double CFL = 0.1;
+// Numerical integration parameters
+const double dmax = 0.1;      // maximum spatial displacement per step
+const double tmax = 500.0;    // maximum time to integrate
+const double CFL = 0.1;       // CFL condition
 
 // Square function
 inline double Sqr(double x)
