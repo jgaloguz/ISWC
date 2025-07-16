@@ -124,7 +124,7 @@ int main(int argc, char** argv)
       AdvanceEuler(t, pos, mom, dt);
       t += dt;
    };
-   std::cerr << "\r" << std::setw(16) << t;
+   std::cerr << "\r" << std::setw(16) << t << std::endl;
 
    return 0;
 };
