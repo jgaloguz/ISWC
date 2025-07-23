@@ -1,12 +1,13 @@
 #include <iostream>
 #include <fstream>
 #include <iomanip>
+#include <mpi.h>
 
 #include "cosray.hh"
 
 #define PRINT_TRAJECTORY
 #define PRINT_INTENSITY
-// #define PARKER_FIELD
+#define PARKER_FIELD
 
 // Compute the background flow and field
 void GetFields(double t, double* pos, double* u, double* B)
@@ -205,67 +206,116 @@ void BinTrajectory(double lnp_init, double* pos_final, double lnp_final, double*
 // Find momentum bin based on starting momentum and add one to the counts array
    bin = (lnp_init - lnp_min) / dlnp;
    counts[bin] += 1.0;
-// Find momentum weight based on the final momentum and add that value to the distribution array
    mom_final = exp(lnp_final);
+// Find momentum weight based on the final momentum and add that value to the distribution array
    distro[bin] += (Norm(pos_final) >= r_max ? OuterBoundaryCondition(pos_final, mom_final) : 0.0);
 };
 
 int main(void)
 {
-// Declare local variables and arrays
+// Initialize the MPI environment
+   MPI_Init(NULL, NULL);
+   
+// Declare local variables and arrays for computations
    int part, bin;
    double mom, lnp_in, lnp_out;
    double pos_in[3], pos_out[3];
    time_t time_start, time_end;
 
+// Find MPI communicator quantities
+   int comm_rank, comm_size;
+   MPI_Comm_rank(MPI_COMM_WORLD, &comm_rank);
+   MPI_Comm_size(MPI_COMM_WORLD, &comm_size);
+
 // Initialize distribution arrays
+   double* counts_partial;
+   double* distro_partial;
    double* counts = new double[nbins];
    double* distro = new double[nbins];
    memset(counts, 0, nbins * sizeof(double));
    memset(distro, 0, nbins * sizeof(double));
-   srand48(time(NULL));
+   srand48(time(NULL)+comm_rank);
 
-   time_start = time(NULL);
+// Assign tasks to workers
+   int ntraj_proc;
+   if(comm_rank == 0) {
+      time_start = time(NULL);
+      ntraj_proc = ntraj / comm_size;
+   };
+   MPI_Bcast(&ntraj_proc, 1, MPI_INT, 0, MPI_COMM_WORLD);
+
 // Loop over all trajectories
-   for(part = 0; part < ntraj; part++) {
+   for(part = 0; part < ntraj_proc; part++) {
 // Initialize trajectory
       InitializeTrajectory(pos_in, lnp_in);
 // Integrate trajectory
       IntegrateTrajectory(pos_in, lnp_in, pos_out, lnp_out, false);
 // Bin trajectory
       BinTrajectory(lnp_in, pos_out, lnp_out, counts, distro);
-      std::cerr << part << " trajectories completed\r";
    };
-   std::cerr << std::endl;
 
-   time_end = time(NULL);
-   std::cerr << "Runtime was " << (int)(time_end - time_start) << "s\n";
+// Gather results from all workers
+   if(comm_rank == 0) {
+      int cpu;
+      counts_partial = new double[nbins];
+      distro_partial = new double[nbins];
+      
+      for(cpu = 1; cpu < comm_size; cpu++) {
+         MPI_Recv(counts_partial, nbins, MPI_DOUBLE, cpu, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+         MPI_Recv(distro_partial, nbins, MPI_DOUBLE, cpu, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+         for(bin = 0; bin < nbins; bin++) {
+            counts[bin] += counts_partial[bin];
+            distro[bin] += distro_partial[bin];
+         };
+      };
 
+      time_end = time(NULL);
+// Output total number of trajectories simulated as a sanity check
+      double total_counts = 0.0;
+      for(bin = 0; bin < nbins; bin++) total_counts += counts[bin];
+      std::cerr << (int)(total_counts) << " trajectories completed\n";
+      std::cerr << "Runtime was " << (int)(time_end - time_start) << "s\n";
+   }
+   else {
+      MPI_Send(counts, nbins, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
+      MPI_Send(distro, nbins, MPI_DOUBLE, 0, 1, MPI_COMM_WORLD);
+   };
+
+
+   if(comm_rank == 0) {
 // Print one trajectory
 #ifdef PRINT_TRAJECTORY
-   const double T_traj = 500.0 * MeV_cgs / unit_energy_particle;
-   IntegrateTrajectory(pos_in, log(Mom(T_traj)), pos_out, lnp_out, true);
+      const double T_traj = 500.0 * MeV_cgs / unit_energy_particle;;
+      IntegrateTrajectory(pos_in, log(Mom(T_traj)), pos_out, lnp_out, true);
 #endif
 
 // Print the spectrum
 #ifdef PRINT_INTENSITY
-   pos_out[0] = r_max;
-   pos_out[1] = 0.0;
-   pos_out[2] = 0.0;
-   std::ofstream intensity_file(intensity_fname.c_str(), std::ofstream::out);
-   intensity_file << std::setprecision(6);
-   for(bin = 0; bin < nbins; bin++) {
-      mom = exp(lnp_min + (bin + 0.5) * dlnp);
-      intensity_file << std::setw(15) << EnrKin(mom) * unit_energy_particle / MeV_cgs
-                     << std::setw(15) << Sqr(mom) * (counts[bin] >= 0.999 ? distro[bin] / counts[bin] : 0.0)
-                     << std::setw(15) << Sqr(mom) * OuterBoundaryCondition(pos_out, mom)
-                     << std::endl;
-   };
-   intensity_file.close();
+      pos_out[0] = r_max;
+      pos_out[1] = 0.0;
+      pos_out[2] = 0.0;
+      std::ofstream intensity_file(intensity_fname.c_str(), std::ofstream::out);
+      intensity_file << std::setprecision(6);
+      for(bin = 0; bin < nbins; bin++) {
+         mom = exp(lnp_min + (bin + 0.5) * dlnp);
+         intensity_file << std::setw(15) << EnrKin(mom) * unit_energy_particle / MeV_cgs
+                        << std::setw(15) << Sqr(mom) * (counts[bin] >= 0.999 ? distro[bin] / counts[bin] : 0.0)
+                        << std::setw(15) << Sqr(mom) * OuterBoundaryCondition(pos_out, mom)
+                        << std::endl;
+      };
+      intensity_file.close();
 #endif
+   };
 
 // Clean up
    delete[] counts;
    delete[] distro;
+   if(comm_rank == 0) {
+      delete[] counts_partial;
+      delete[] distro_partial;
+   };
+
+// Finalize the MPI environment.
+   MPI_Finalize();
 };
 
