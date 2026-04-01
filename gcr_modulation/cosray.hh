@@ -102,8 +102,8 @@ inline void GetPerpVec(double* v_in, double* v_out)
    Cross(v_in, unit_vec, v_out);
 };
 
-// Change vector from basis to cartesian
-void ChangeFromBasis(double basis[][3], double* v)
+// Change vector from basis to Cartesian
+inline void ChangeFromBasis(double basis[][3], double* v)
 {
    double v_new[3];
    v_new[0] = v[0] * basis[0][0] + v[1] * basis[1][0] + v[2] * basis[2][0];

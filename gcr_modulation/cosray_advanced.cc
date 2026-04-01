@@ -1,12 +1,15 @@
 #include <iostream>
 #include <fstream>
 #include <iomanip>
+#include <mpi.h>
 
 #include "cosray.hh"
 
 #define PRINT_TRAJECTORY
 #define PRINT_INTENSITY
-// #define PARKER_FIELD
+#define PARKER_FIELD
+#define MAGNETIC_DRIFT
+#define CURRENT_SHEET
 
 // Compute the background flow and field
 void GetFields(double t, double* pos, double* u, double* B)
@@ -40,6 +43,14 @@ void GetFields(double t, double* pos, double* u, double* B)
    B[0] = B_0 * sintheta * cosphi;
    B[1] = B_0 * sintheta * sinphi;
    B[2] = B_0 * costheta;
+#endif
+#ifdef CURRENT_SHEET
+// Flat equatorial current sheet
+   if (pos[2] < 0.0) {
+      B[0] *= -1.0;
+      B[1] *= -1.0;
+      B[2] *= -1.0;
+   };
 #endif
 };
 
@@ -94,6 +105,7 @@ void IntegrateTrajectory(double* pos_in, double lnp_in, double* pos_out, double&
    static double rn[4];
    double pos[3], pos1[3], pos_rate[3], pos_rate2[3], basis[3][3];
    double u[3], B[3], u1[3], B1[3], Kappa[3][3], Kappa1[3][3], divK[3];
+   double magB, vrL_3, curlB[3], gradB[3], gradBxB[3];
    std::ofstream trajectory_file;
 
 // Initialize local variables
@@ -115,7 +127,8 @@ void IntegrateTrajectory(double* pos_in, double lnp_in, double* pos_out, double&
    while(r > r_min && r < r_max) {
 // Get fields and diffusion tensor
       GetFields(t, pos, u, B);
-      k_para = GetKappaPara(t, pos, mom, Norm(B));
+      magB = Norm(B);
+      k_para = GetKappaPara(t, pos, mom, magB);
       k_perp = eta * k_para;
       GetKappaTensor(t, pos, mom, B, Kappa);
 
@@ -141,6 +154,38 @@ void IntegrateTrajectory(double* pos_in, double lnp_in, double* pos_out, double&
       pos_rate[1] = u[1] - divK[1];
       pos_rate[2] = u[2] - divK[2];
       lnp_rate = -2.0 * u_0 / (3.0 * r);
+
+#ifdef MAGNETIC_DRIFT
+// Compute and add magnetic drifts (numerical derivative)
+      curlB[0] = 0.0;
+      curlB[1] = 0.0;
+      curlB[2] = 0.0;
+      gradB[0] = 0.0;
+      gradB[1] = 0.0;
+      gradB[2] = 0.0;
+      for(j = 0; j < 3; j++) {
+         for(i = 0; i < 3; i++) pos1[i] = pos[i];
+         pos1[j] += delta;
+         GetFields(t, pos1, u1, B1);
+         gradB[j] = (Norm(B1) - magB) / delta;
+         if (j == 0) {
+            curlB[1] -= (B1[2] - B[2]) / delta;
+            curlB[2] += (B1[1] - B[1]) / delta;
+         } else if (j == 1) {
+            curlB[0] += (B1[2] - B[2]) / delta;
+            curlB[2] -= (B1[0] - B[0]) / delta;
+         } else {
+            curlB[0] -= (B1[1] - B[1]) / delta;
+            curlB[1] += (B1[0] - B[0]) / delta;
+         };
+      };
+      Cross(gradB, B, gradBxB);
+      vrL_3 = mom * Vel(mom) * c_code / (3.0 * q_p * magB);
+
+      pos_rate[0] += vrL_3 * (curlB[0] - 2.0 * gradBxB[0] / magB);
+      pos_rate[1] += vrL_3 * (curlB[1] - 2.0 * gradBxB[1] / magB);
+      pos_rate[2] += vrL_3 * (curlB[2] - 2.0 * gradBxB[2] / magB);
+#endif
 
 // Diffusion in the x' and y' direction (FA frame)
       rn[0] = drand48();
@@ -205,67 +250,116 @@ void BinTrajectory(double lnp_init, double* pos_final, double lnp_final, double*
 // Find momentum bin based on starting momentum and add one to the counts array
    bin = (lnp_init - lnp_min) / dlnp;
    counts[bin] += 1.0;
-// Find momentum weight based on the final momentum and add that value to the distribution array
    mom_final = exp(lnp_final);
+// Find momentum weight based on the final momentum and add that value to the distribution array
    distro[bin] += (Norm(pos_final) >= r_max ? OuterBoundaryCondition(pos_final, mom_final) : 0.0);
 };
 
 int main(void)
 {
-// Declare local variables and arrays
+// Initialize the MPI environment
+   MPI_Init(NULL, NULL);
+   
+// Declare local variables and arrays for computations
    int part, bin;
    double mom, lnp_in, lnp_out;
    double pos_in[3], pos_out[3];
    time_t time_start, time_end;
 
+// Find MPI communicator quantities
+   int comm_rank, comm_size;
+   MPI_Comm_rank(MPI_COMM_WORLD, &comm_rank);
+   MPI_Comm_size(MPI_COMM_WORLD, &comm_size);
+
 // Initialize distribution arrays
+   double* counts_partial;
+   double* distro_partial;
    double* counts = new double[nbins];
    double* distro = new double[nbins];
    memset(counts, 0, nbins * sizeof(double));
    memset(distro, 0, nbins * sizeof(double));
-   srand48(time(NULL));
+   srand48(time(NULL)+comm_rank);
 
-   time_start = time(NULL);
+// Assign tasks to workers
+   int ntraj_proc;
+   if(comm_rank == 0) {
+      time_start = time(NULL);
+      ntraj_proc = ntraj / comm_size;
+   };
+   MPI_Bcast(&ntraj_proc, 1, MPI_INT, 0, MPI_COMM_WORLD);
+
 // Loop over all trajectories
-   for(part = 0; part < ntraj; part++) {
+   for(part = 0; part < ntraj_proc; part++) {
 // Initialize trajectory
       InitializeTrajectory(pos_in, lnp_in);
 // Integrate trajectory
       IntegrateTrajectory(pos_in, lnp_in, pos_out, lnp_out, false);
 // Bin trajectory
       BinTrajectory(lnp_in, pos_out, lnp_out, counts, distro);
-      std::cerr << part << " trajectories completed\r";
    };
-   std::cerr << std::endl;
 
-   time_end = time(NULL);
-   std::cerr << "Runtime was " << (int)(time_end - time_start) << "s\n";
+// Gather results from all workers
+   if(comm_rank == 0) {
+      int cpu;
+      counts_partial = new double[nbins];
+      distro_partial = new double[nbins];
+      
+      for(cpu = 1; cpu < comm_size; cpu++) {
+         MPI_Recv(counts_partial, nbins, MPI_DOUBLE, cpu, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+         MPI_Recv(distro_partial, nbins, MPI_DOUBLE, cpu, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+         for(bin = 0; bin < nbins; bin++) {
+            counts[bin] += counts_partial[bin];
+            distro[bin] += distro_partial[bin];
+         };
+      };
 
+      time_end = time(NULL);
+// Output total number of trajectories simulated as a sanity check
+      double total_counts = 0.0;
+      for(bin = 0; bin < nbins; bin++) total_counts += counts[bin];
+      std::cerr << (int)(total_counts) << " trajectories completed\n";
+      std::cerr << "Runtime was " << (int)(time_end - time_start) << "s\n";
+   }
+   else {
+      MPI_Send(counts, nbins, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
+      MPI_Send(distro, nbins, MPI_DOUBLE, 0, 1, MPI_COMM_WORLD);
+   };
+
+
+   if(comm_rank == 0) {
 // Print one trajectory
 #ifdef PRINT_TRAJECTORY
-   const double T_traj = 500.0 * MeV_cgs / unit_energy_particle;
-   IntegrateTrajectory(pos_in, log(Mom(T_traj)), pos_out, lnp_out, true);
+      const double T_traj = 500.0 * MeV_cgs / unit_energy_particle;;
+      IntegrateTrajectory(pos_in, log(Mom(T_traj)), pos_out, lnp_out, true);
 #endif
 
 // Print the spectrum
 #ifdef PRINT_INTENSITY
-   pos_out[0] = r_max;
-   pos_out[1] = 0.0;
-   pos_out[2] = 0.0;
-   std::ofstream intensity_file(intensity_fname.c_str(), std::ofstream::out);
-   intensity_file << std::setprecision(6);
-   for(bin = 0; bin < nbins; bin++) {
-      mom = exp(lnp_min + (bin + 0.5) * dlnp);
-      intensity_file << std::setw(15) << EnrKin(mom) * unit_energy_particle / MeV_cgs
-                     << std::setw(15) << Sqr(mom) * (counts[bin] >= 0.999 ? distro[bin] / counts[bin] : 0.0)
-                     << std::setw(15) << Sqr(mom) * OuterBoundaryCondition(pos_out, mom)
-                     << std::endl;
-   };
-   intensity_file.close();
+      pos_out[0] = r_max;
+      pos_out[1] = 0.0;
+      pos_out[2] = 0.0;
+      std::ofstream intensity_file(intensity_fname.c_str(), std::ofstream::out);
+      intensity_file << std::setprecision(6);
+      for(bin = 0; bin < nbins; bin++) {
+         mom = exp(lnp_min + (bin + 0.5) * dlnp);
+         intensity_file << std::setw(15) << EnrKin(mom) * unit_energy_particle / MeV_cgs
+                        << std::setw(15) << Sqr(mom) * (counts[bin] >= 0.999 ? distro[bin] / counts[bin] : 0.0)
+                        << std::setw(15) << Sqr(mom) * OuterBoundaryCondition(pos_out, mom)
+                        << std::endl;
+      };
+      intensity_file.close();
 #endif
+   };
 
 // Clean up
    delete[] counts;
    delete[] distro;
+   if(comm_rank == 0) {
+      delete[] counts_partial;
+      delete[] distro_partial;
+   };
+
+// Finalize the MPI environment.
+   MPI_Finalize();
 };
 

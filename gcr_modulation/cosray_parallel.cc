@@ -125,7 +125,7 @@ void IntegrateTrajectory(double* pos_in, double lnp_in, double* pos_out, double&
       GetPerpVec(basis[2], basis[1]);
       Cross(basis[1], basis[2], basis[0]);
       
-// Compute the divergence of K (numerial derivative)
+// Compute the divergence of K (numerical derivative)
       divK[0] = 0.0;
       divK[1] = 0.0;
       divK[2] = 0.0;
