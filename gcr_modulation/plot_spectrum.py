@@ -3,18 +3,17 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # Load data from file
-spectrum = np.loadtxt("spectrum.dat")
+spectrum1 = np.loadtxt("intensity_1au.dat")
 
 # Prepare arrays
-Energy = spectrum[:,0]
-ModulatedSpectrum = spectrum[:,1]
-UnmodulatedSpectrum = spectrum[:,2]
-
+Energy1 = spectrum1[:,0]
+ModulatedSpectrum1 = spectrum1[:,1]
+UnmodulatedSpectrum1 = spectrum1[:,2]
 
 # Plot data
 ax = plt.figure().add_subplot()
-ax.loglog(Energy, ModulatedSpectrum, label='Modulated')
-ax.loglog(Energy, UnmodulatedSpectrum, label='Unmodulated')
+ax.loglog(Energy1, ModulatedSpectrum1, label='Modulated')
+ax.loglog(Energy1, UnmodulatedSpectrum1, label='Unmodulated')
 
 # Set axes labels and legend
 ax.set_xlabel("Energy")

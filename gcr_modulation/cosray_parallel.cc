@@ -134,7 +134,7 @@ void IntegrateTrajectory(double* pos_in, double lnp_in, double* pos_out, double&
          pos1[j] += delta;
          GetFields(t, pos1, u1, B1);
          GetKappaTensor(t, pos1, mom, B1, Kappa1);
-         for(i = 0; i < 3; i++) divK[i] += (Kappa1[i][j] - Kappa[i][j]) / delta;
+         for(i = 0; i < 3; i++) divK[i] += (Kappa1[j][i] - Kappa[j][i]) / delta;
       };
 
 // Advective terms
@@ -181,9 +181,9 @@ void IntegrateTrajectory(double* pos_in, double lnp_in, double* pos_out, double&
 
 // Print the projection on the XY plane
       if(print) {
-         trajectory_file << std::setw(15) << pos[0] * unit_length_fluid / AU_cgs
-                         << std::setw(15) << pos[1] * unit_length_fluid / AU_cgs
-                         << std::setw(15) << pos[2] * unit_length_fluid / AU_cgs
+         trajectory_file << std::setw(15) << pos[0]
+                         << std::setw(15) << pos[1]
+                         << std::setw(15) << pos[2]
                          << std::setw(15) << mom
                          << std::endl;
       };
@@ -201,12 +201,11 @@ void IntegrateTrajectory(double* pos_in, double lnp_in, double* pos_out, double&
 void BinTrajectory(double lnp_init, double* pos_final, double lnp_final, double* counts, double* distro)
 {
    int bin;
-   double mom_final;
+   double mom_final = exp(lnp_final);
 
 // Find momentum bin based on starting momentum and add one to the counts array
    bin = (lnp_init - lnp_min) / dlnp;
    counts[bin] += 1.0;
-   mom_final = exp(lnp_final);
 // Find momentum weight based on the final momentum and add that value to the distribution array
    distro[bin] += (Norm(pos_final) >= r_max ? OuterBoundaryCondition(pos_final, mom_final) : 0.0);
 };
@@ -285,7 +284,7 @@ int main(void)
    if(comm_rank == 0) {
 // Print one trajectory
 #ifdef PRINT_TRAJECTORY
-      const double T_traj = 500.0 * MeV_cgs / unit_energy_particle;;
+      const double T_traj = 500.0 * MeV_cgs / unit_energy_particle;
       IntegrateTrajectory(pos_in, log(Mom(T_traj)), pos_out, lnp_out, true);
 #endif
 
@@ -298,7 +297,7 @@ int main(void)
       intensity_file << std::setprecision(6);
       for(bin = 0; bin < nbins; bin++) {
          mom = exp(lnp_min + (bin + 0.5) * dlnp);
-         intensity_file << std::setw(15) << EnrKin(mom) * unit_energy_particle / MeV_cgs
+         intensity_file << std::setw(15) << EnrKin(mom) / MeV_cgs
                         << std::setw(15) << Sqr(mom) * (counts[bin] >= 0.999 ? distro[bin] / counts[bin] : 0.0)
                         << std::setw(15) << Sqr(mom) * OuterBoundaryCondition(pos_out, mom)
                         << std::endl;

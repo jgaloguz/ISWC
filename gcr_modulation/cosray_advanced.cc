@@ -8,8 +8,9 @@
 #define PRINT_TRAJECTORY
 #define PRINT_INTENSITY
 #define PARKER_FIELD
-#define MAGNETIC_DRIFT
 #define CURRENT_SHEET
+#define MAGNETIC_DRIFT
+#define SMITH_BIEBER
 
 // Compute the background flow and field
 void GetFields(double t, double* pos, double* u, double* B)
@@ -23,8 +24,13 @@ void GetFields(double t, double* pos, double* u, double* B)
 // Angles for conversion to Cartesian
    costheta = pos[2] / r;
    sintheta = sqrt(fmax(1.0 - Sqr(costheta), 0.0));
-   cosphi = pos[0] / s;
-   sinphi = pos[1] / s;
+   if (s < 1.0e-12) {
+      cosphi = 0.0;
+      sinphi = 0.0;
+   } else {
+      cosphi = pos[0] / s;
+      sinphi = pos[1] / s;
+   };
    
 // Radial flow with constant speed
    u[0] = u_0 * sintheta * cosphi;
@@ -35,6 +41,9 @@ void GetFields(double t, double* pos, double* u, double* B)
 // Parker spiral magnetic field
    double Br = B_0 * Sqr(r_0 / r);
    double Bp = -Br * r * omega / u_0 * sintheta;
+#ifdef SMITH_BIEBER
+   Bp -= 0.1 * Br * r * omega / u_0;
+#endif
    B[0] = Br * sintheta * cosphi - Bp * sinphi;
    B[1] = Br * sintheta * sinphi + Bp * cosphi;
    B[2] = Br * costheta;
@@ -46,6 +55,8 @@ void GetFields(double t, double* pos, double* u, double* B)
 #endif
 #ifdef CURRENT_SHEET
 // Flat equatorial current sheet
+// if z < 0: positive cycle (A > 0)
+// if z > 0: negative cycle (A < 0)
    if (pos[2] < 0.0) {
       B[0] *= -1.0;
       B[1] *= -1.0;
@@ -57,7 +68,20 @@ void GetFields(double t, double* pos, double* u, double* B)
 // Compute parallel component of diffusion
 inline double GetKappaPara(double t, double* pos, double mom, double Bmag)
 {
-// TODO
+   double r = Norm(pos);
+   double v = Vel(mom);
+   double Omega = CyclotronFreq(v, Bmag);
+   double l_b = 1.2618 * lc_0 * sqrt(r / r_0);
+   double A2_sl = 0.2 * dB2_0 * Sqr(r_0 / r) / Sqr(Bmag);
+   return 3.0 * Cube(v) / (20.0 * l_b * Sqr(Omega) * A2_sl * sin(3.0 * M_PI / 5.0)) * (1.0 + (72.0 / 7.0) * cbrt(Quint(l_b * Omega / v)));
+};
+
+// Compute perpendicular component of diffusion
+inline double GetKappaPerp(double t, double* pos, double mom, double Bmag)
+{
+   double A2_2D = 0.8 * dB2_0 * Sqr(r_0 / Norm(pos)) / Sqr(Bmag);
+   double kappa_para = GetKappaPara(t, pos, mom, Bmag);
+   return eta * A2_2D * kappa_para;
 };
 
 // Compute all 9 components of the diffusion tensor
@@ -69,7 +93,7 @@ void GetKappaTensor(double t, double* pos, double mom, double* B, double Kappa[]
    Bmag = Norm(B);
    Bmag2 = Sqr(Bmag);
    k_para = GetKappaPara(t, pos, mom, Bmag);
-   k_perp = eta * k_para;
+   k_perp = GetKappaPerp(t, pos, mom, Bmag);
 
    for(i = 0; i < 3; i++) {
       for(j = 0; j < 3; j++) {
@@ -82,7 +106,8 @@ void GetKappaTensor(double t, double* pos, double mom, double* B, double Kappa[]
 // Boundary condition
 inline double OuterBoundaryCondition(double* pos, double mom)
 {
-// TODO
+   double T = EnrKin(mom) / T_0;
+   return (12.0 / Sqr(mom)) * pow(T, -2.6) / (1.0 + 5.3 * pow(T, -1.22) + 1.3 * pow(T, -2.8) + 0.0087 * pow(T, -4.32));
 };
 
 // Set initial conditions
@@ -129,7 +154,7 @@ void IntegrateTrajectory(double* pos_in, double lnp_in, double* pos_out, double&
       GetFields(t, pos, u, B);
       magB = Norm(B);
       k_para = GetKappaPara(t, pos, mom, magB);
-      k_perp = eta * k_para;
+      k_perp = GetKappaPerp(t, pos, mom, magB);
       GetKappaTensor(t, pos, mom, B, Kappa);
 
 // Field-aligned (FA) frame
@@ -146,7 +171,7 @@ void IntegrateTrajectory(double* pos_in, double lnp_in, double* pos_out, double&
          pos1[j] += delta;
          GetFields(t, pos1, u1, B1);
          GetKappaTensor(t, pos1, mom, B1, Kappa1);
-         for(i = 0; i < 3; i++) divK[i] += (Kappa1[i][j] - Kappa[i][j]) / delta;
+         for(i = 0; i < 3; i++) divK[i] += (Kappa1[j][i] - Kappa[j][i]) / delta;
       };
 
 // Advective terms
@@ -225,9 +250,9 @@ void IntegrateTrajectory(double* pos_in, double lnp_in, double* pos_out, double&
 
 // Print the projection on the XY plane
       if(print) {
-         trajectory_file << std::setw(15) << pos[0] * unit_length_fluid / AU_cgs
-                         << std::setw(15) << pos[1] * unit_length_fluid / AU_cgs
-                         << std::setw(15) << pos[2] * unit_length_fluid / AU_cgs
+         trajectory_file << std::setw(15) << pos[0]
+                         << std::setw(15) << pos[1]
+                         << std::setw(15) << pos[2]
                          << std::setw(15) << mom
                          << std::endl;
       };
@@ -245,12 +270,11 @@ void IntegrateTrajectory(double* pos_in, double lnp_in, double* pos_out, double&
 void BinTrajectory(double lnp_init, double* pos_final, double lnp_final, double* counts, double* distro)
 {
    int bin;
-   double mom_final;
+   double mom_final = exp(lnp_final);
 
 // Find momentum bin based on starting momentum and add one to the counts array
    bin = (lnp_init - lnp_min) / dlnp;
    counts[bin] += 1.0;
-   mom_final = exp(lnp_final);
 // Find momentum weight based on the final momentum and add that value to the distribution array
    distro[bin] += (Norm(pos_final) >= r_max ? OuterBoundaryCondition(pos_final, mom_final) : 0.0);
 };
@@ -329,7 +353,7 @@ int main(void)
    if(comm_rank == 0) {
 // Print one trajectory
 #ifdef PRINT_TRAJECTORY
-      const double T_traj = 500.0 * MeV_cgs / unit_energy_particle;;
+      const double T_traj = 500.0 * MeV_cgs;
       IntegrateTrajectory(pos_in, log(Mom(T_traj)), pos_out, lnp_out, true);
 #endif
 
@@ -342,7 +366,7 @@ int main(void)
       intensity_file << std::setprecision(6);
       for(bin = 0; bin < nbins; bin++) {
          mom = exp(lnp_min + (bin + 0.5) * dlnp);
-         intensity_file << std::setw(15) << EnrKin(mom) * unit_energy_particle / MeV_cgs
+         intensity_file << std::setw(15) << EnrKin(mom) / MeV_cgs
                         << std::setw(15) << Sqr(mom) * (counts[bin] >= 0.999 ? distro[bin] / counts[bin] : 0.0)
                         << std::setw(15) << Sqr(mom) * OuterBoundaryCondition(pos_out, mom)
                         << std::endl;
